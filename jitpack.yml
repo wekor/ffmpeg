@@ -1,0 +1,8 @@
+# JitPack serves the FFmpegKit Android AAR as com.github.wekor:ffmpeg:<tag>. It builds nothing: the AAR and its
+# POM are built by .github/workflows/native.yml and attached to the GitHub release of the same tag.
+jdk:
+  - openjdk17
+install:
+  - curl --fail --location --silent --show-error --retry 3 -o ffmpeg-kit.aar "https://github.com/wekor/ffmpeg/releases/download/${VERSION}/ffmpeg-kit-android.aar"
+  - curl --fail --location --silent --show-error --retry 3 -o ffmpeg-kit.pom "https://github.com/wekor/ffmpeg/releases/download/${VERSION}/ffmpeg-kit-android.pom"
+  - mvn install:install-file -Dfile=ffmpeg-kit.aar -DpomFile=ffmpeg-kit.pom

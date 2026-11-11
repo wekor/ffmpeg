@@ -1,0 +1,58 @@
+# Checks the React Native package (react-native/): lint, types, the JS build, then the example app on Android and
+# iOS against the FFmpegKit binaries named in react-native/package.json (built by native.yml).
+name: React Native
+on:
+  push:
+    branches: [master]
+    paths: [react-native/**, .github/workflows/react-native.yml]
+  pull_request:
+    branches: [master]
+    paths: [react-native/**, .github/workflows/react-native.yml]
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+defaults:
+  run:
+    working-directory: react-native
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: react-native/.nvmrc
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: react-native/.bun-version
+      - run: bun install
+      - run: bun run check
+      - run: bun run typecheck
+      - run: bun run prepare
+      - run: bun run test
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: bun run build:android:prepare
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+      - run: bun run build:android -PreactNativeArchitectures=arm64-v8a
+
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: react-native/.nvmrc
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: react-native/.bun-version
+      - run: bun install
+      - run: bun run build:ios:prepare
+      - run: bun run build:ios

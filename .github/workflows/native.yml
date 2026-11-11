@@ -1,0 +1,329 @@
+# Builds the FFmpegKit binaries the React Native package uses and attaches them to a GitHub release:
+#   ffmpeg-kit-android.aar / .pom   served by JitPack as com.github.wekor:ffmpeg:<release> (see jitpack.yml)
+#   ffmpeg-kit-ios-xcframework.zip  downloaded by react-native/ReactNativeFFmpeg.podspec
+#
+# The sources and build scripts are FFmpegKitNext's (LGPL-3.0), checked out at `upstream-ref`. One job builds one
+# architecture, since all of a platform's architectures overrun the six-hour job limit; a packaging job then reuses
+# their prebuilt libraries and only links FFmpegKit and assembles the AAR or the xcframeworks.
+#
+# After it runs, set `ffmpegKit.release` (and `ffmpegKit.iosSha256`, printed in the run summary) in
+# react-native/package.json.
+name: Native
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream-ref:
+        description: FFmpegKitNext tag or commit to build
+        required: true
+        default: v9.0.2
+      release:
+        description: Release tag to create in this repository
+        required: true
+        default: native-v9.0.2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ inputs.release }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: arthenica/ffmpeg-kit-next
+  # LGPL only: no x264, x265, xvidcore, vid.stab or rubberband. openssl provides TLS (FFmpegKitNext's CI leaves
+  # gnutls out).
+  COMMON_LIBRARIES: >-
+    --enable-lib-dav1d --enable-lib-fontconfig --enable-lib-freetype --enable-lib-fribidi --enable-lib-kvazaar
+    --enable-lib-lame --enable-lib-libass --enable-lib-libilbc --enable-lib-libtheora --enable-lib-libvorbis
+    --enable-lib-libvpx --enable-lib-libwebp --enable-lib-libxml2 --enable-lib-opencore-amr --enable-lib-opus
+    --enable-lib-shine --enable-lib-snappy --enable-lib-soxr --enable-lib-speex --enable-lib-twolame
+    --enable-lib-vo-amrwbenc --enable-lib-zimg --enable-lib-openssl
+  ANDROID_LIBRARIES: --enable-lib-libiconv --enable-lib-android-zlib --enable-lib-android-media-codec
+  IOS_LIBRARIES: >-
+    --enable-lib-ios-libiconv --enable-lib-ios-zlib --enable-lib-ios-bzip2 --enable-lib-ios-audiotoolbox
+    --enable-lib-ios-videotoolbox --enable-lib-ios-avfoundation
+  ANDROID_ARCHITECTURES: arm-v7a-neon,arm64-v8a,x86,x86-64
+  IOS_ARCHITECTURES: arm64,arm64-simulator,x86-64
+  ANDROID_PLATFORM_VERSION: "34"
+  ANDROID_BUILD_TOOLS_VERSION: "35.0.0"
+  ANDROID_NDK_VERSION: "27.3.13750724"
+  ANDROID_CMAKE_VERSION: "3.22.1"
+
+jobs:
+  android:
+    name: android ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm-v7a-neon, arm64-v8a, x86, x86-64]
+    defaults:
+      run:
+        shell: bash
+        working-directory: upstream
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: self
+          sparse-checkout: .github
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ inputs.upstream-ref }}
+          path: upstream
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install host packages
+        run: ../self/.github/scripts/install-host-packages.sh linux
+      - name: Install Android SDK and NDK
+        run: ../self/.github/scripts/install-android-sdk.sh
+      - name: Build
+        run: ./android.sh --arch=${{ matrix.arch }} $COMMON_LIBRARIES $ANDROID_LIBRARIES --no-archive
+      - name: Print build log
+        if: failure()
+        run: tail -200 build.log
+      - name: Pack prebuilt libraries
+        run: tar -czf ../android-${{ matrix.arch }}.tar.gz prebuilt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ matrix.arch }}
+          path: android-${{ matrix.arch }}.tar.gz
+          retention-days: 3
+
+  android-package:
+    needs: android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+        working-directory: upstream
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: self
+          sparse-checkout: .github
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ inputs.upstream-ref }}
+          path: upstream
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install host packages
+        run: ../self/.github/scripts/install-host-packages.sh linux
+      - name: Install Android SDK and NDK
+        run: ../self/.github/scripts/install-android-sdk.sh
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-*
+          path: artifacts
+          merge-multiple: true
+      - name: Unpack prebuilt libraries
+        run: for archive in ../artifacts/*.tar.gz; do tar -xzf "$archive"; done
+      # Every library is found already installed; FFmpeg itself was built per architecture, so only FFmpegKit's
+      # JNI library and the AAR are built here.
+      - name: Package
+        run: ./android.sh --arch=$ANDROID_ARCHITECTURES $COMMON_LIBRARIES $ANDROID_LIBRARIES --skip=ffmpeg
+      - name: Print build log
+        if: failure()
+        run: tail -200 build.log
+      - name: Collect the AAR and its POM
+        env:
+          RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          aar=$(find prebuilt -path '*-maven/com/arthenica/ffmpeg-kit-next/*/ffmpeg-kit-next-*.aar' -print -quit)
+          test -n "$aar"
+          mkdir -p ../out
+          cp "$aar" ../out/ffmpeg-kit-android.aar
+          # Coordinates are JitPack's: com.github.<owner>:<repo>:<tag>. Dependencies match FFmpegKitNext's POM.
+          cat > ../out/ffmpeg-kit-android.pom <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>com.github.wekor</groupId>
+            <artifactId>ffmpeg</artifactId>
+            <version>${RELEASE}</version>
+            <packaging>aar</packaging>
+            <licenses>
+              <license>
+                <name>LGPL-3.0</name>
+              </license>
+            </licenses>
+            <dependencies>
+              <dependency>
+                <groupId>com.arthenica</groupId>
+                <artifactId>smart-exception-java</artifactId>
+                <version>0.2.1</version>
+                <scope>runtime</scope>
+              </dependency>
+              <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-stdlib</artifactId>
+                <version>2.0.21</version>
+                <scope>runtime</scope>
+              </dependency>
+            </dependencies>
+          </project>
+          EOF
+          unzip -l ../out/ffmpeg-kit-android.aar | grep '\.so$'
+      # Google Play requires 16 KB page support for 64-bit ABIs: every LOAD segment must be aligned to at least
+      # 16 KB. FFmpegKitNext passes -z max-page-size=16384 for arm64-v8a and x86_64; this fails the run if any
+      # library was linked without it.
+      - name: Check 16 KB page alignment
+        run: |
+          set -euo pipefail
+          readelf="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          rm -rf ../aar && mkdir ../aar
+          unzip -q ../out/ffmpeg-kit-android.aar 'jni/*' -d ../aar
+          failed=0
+          for so in ../aar/jni/arm64-v8a/*.so ../aar/jni/x86_64/*.so; do
+            for align in $("$readelf" -lW "$so" | awk '$1 == "LOAD" { print $NF }'); do
+              if (( align < 0x4000 )); then
+                echo "::error::$(basename "$(dirname "$so")")/$(basename "$so") has a LOAD segment aligned to $align"
+                failed=1
+              fi
+            done
+          done
+          (( failed == 0 )) && echo "All 64-bit libraries are 16 KB aligned."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-android
+          path: out/*
+          retention-days: 7
+
+  ios:
+    name: ios ${{ matrix.arch }}
+    runs-on: macos-26
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, arm64-simulator, x86-64]
+    defaults:
+      run:
+        shell: bash
+        working-directory: upstream
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: self
+          sparse-checkout: .github
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ inputs.upstream-ref }}
+          path: upstream
+      - name: Install host packages
+        run: ../self/.github/scripts/install-host-packages.sh macos
+      - name: Print Xcode version
+        run: xcodebuild -version
+      - name: Build
+        run: ./ios.sh --arch=${{ matrix.arch }} --xcframework --no-framework $COMMON_LIBRARIES $IOS_LIBRARIES
+      - name: Print build log
+        if: failure()
+        run: tail -200 build.log
+      - name: Pack prebuilt libraries
+        run: tar -czf ../ios-${{ matrix.arch }}.tar.gz prebuilt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ matrix.arch }}
+          path: ios-${{ matrix.arch }}.tar.gz
+          retention-days: 3
+
+  ios-package:
+    needs: ios
+    runs-on: macos-26
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+        working-directory: upstream
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: self
+          sparse-checkout: .github
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ inputs.upstream-ref }}
+          path: upstream
+      - name: Install host packages
+        run: ../self/.github/scripts/install-host-packages.sh macos
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ios-*
+          path: artifacts
+          merge-multiple: true
+      - name: Unpack prebuilt libraries
+        run: for archive in ../artifacts/*.tar.gz; do tar -xzf "$archive"; done
+      # Every library, FFmpeg and FFmpegKit were built per architecture; this only assembles the xcframeworks.
+      - name: Package
+        run: ./ios.sh --arch=$IOS_ARCHITECTURES --xcframework $COMMON_LIBRARIES $IOS_LIBRARIES --skip=ffmpeg --skip=ffmpeg-kit
+      - name: Print build log
+        if: failure()
+        run: tail -200 build.log
+      - name: Zip the xcframeworks
+        run: |
+          set -euo pipefail
+          bundle=$(find prebuilt -maxdepth 1 -type d -name 'bundle-apple-xcframework-ios-*' -print -quit)
+          test -n "$bundle"
+          ls "$bundle"
+          mkdir -p ../out
+          (cd "$bundle" && zip -qry "$GITHUB_WORKSPACE/out/ffmpeg-kit-ios-xcframework.zip" ./*.xcframework)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-ios
+          path: out/*
+          retention-days: 7
+
+  release:
+    needs: [android-package, ios-package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: out
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ inputs.release }}
+          UPSTREAM_REF: ${{ inputs.upstream-ref }}
+        run: |
+          set -euo pipefail
+          notes="FFmpegKit binaries built from ${UPSTREAM_REPOSITORY}@${UPSTREAM_REF} (LGPL-3.0)."
+          if gh release view "$RELEASE" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$RELEASE" out/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE" out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$RELEASE" --notes "$notes"
+          fi
+          sha=$(sha256sum out/ffmpeg-kit-ios-xcframework.zip | cut -d ' ' -f 1)
+          {
+            echo "### $RELEASE"
+            echo
+            echo "Set in react-native/package.json:"
+            echo
+            echo '```json'
+            echo "\"ffmpegKit\": { \"release\": \"$RELEASE\", \"iosSha256\": \"$sha\" }"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # JitPack builds an artifact on its first request; ask now so the first app build doesn't wait for it.
+      - name: Warm up JitPack
+        env:
+          RELEASE: ${{ inputs.release }}
+        run: |
+          curl --silent --show-error --max-time 900 --output /dev/null --write-out '%{http_code}\n' \
+            "https://jitpack.io/com/github/${GITHUB_REPOSITORY}/${RELEASE}/ffmpeg-${RELEASE}.pom" || true

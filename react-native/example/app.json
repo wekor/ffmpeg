@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "FFmpeg Example",
+    "slug": "react-native-ffmpeg-example",
+    "scheme": "ffmpegexample",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "com.wekor.ffmpeg.example"
+    },
+    "android": {
+      "package": "com.wekor.ffmpeg.example"
+    }
+  }
+}

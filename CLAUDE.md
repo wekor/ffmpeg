@@ -6,7 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FFmpegKit is a multi-platform wrapper library for FFmpeg/FFprobe supporting Android, iOS, macOS, tvOS, Linux, Flutter, and React Native. This is a community fork focused on Android 16KB page size compatibility (API 35+). The original project has been retired.
 
-## Build Commands
+## React Native package (the maintained part)
+
+`react-native/` is `@wekor/react-native-ffmpeg` 9.x: a standalone package that follows the conventions of the owner's
+`react-native-ble` library (React Native 0.80+, New Architecture only, bun, biome, react-native-builder-bob, strict
+TypeScript, Kotlin, Objective-C++). It does **not** use the FFmpeg 6.0 build tree in this repo.
+
+- `react-native/src/NativeReactNativeFFmpeg.ts` — the TurboModule spec (codegen `ReactNativeFFmpegSpec`, module
+  `ReactNativeFFmpeg`, typed `onLog`/`onStatistics`/`onComplete`/`onSessionDeleted` events). The rest of `src/` is
+  the FFmpegKit JS API, kept compatible with 6.x.
+- `react-native/android/` — Kotlin TurboModule (`com.wekor.reactnativeffmpeg`); depends on the FFmpegKit AAR as
+  `com.github.wekor:ffmpeg:<release>` from JitPack.
+- `react-native/ios/` — Objective-C++ TurboModule; the podspec downloads the FFmpegKit xcframeworks of the release
+  at `pod install` and checks their SHA-256.
+- `react-native/example/` — Expo app that runs a self-test (version, encode, probe) on launch.
+- Binaries: `.github/workflows/native.yml` builds FFmpegKitNext (`arthenica/ffmpeg-kit-next`, LGPL-3.0) on GitHub
+  Actions, one job per architecture, and attaches the AAR/POM and the xcframework zip to a `native-v<version>`
+  release; `jitpack.yml` republishes that AAR. `react-native/package.json` pins the release in `ffmpegKit`.
+- CI: `.github/workflows/react-native.yml` (lint, types, build, example on Android and iOS),
+  `react-native-publish.yml` (npm on `v*` tags).
+- Don't build FFmpeg or the example locally; use the workflows.
+
+## Build Commands (legacy FFmpeg 6.0 tree)
 
 Each platform has a top-level build script. All must be run from the repo root.
 

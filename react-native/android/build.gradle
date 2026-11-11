@@ -1,130 +1,56 @@
+import groovy.json.JsonSlurper
+
 buildscript {
-  repositories {
-    google()
-    mavenCentral()
+  ext.ReactNativeFFmpeg = [
+    minSdkVersion: 24,
+    compileSdkVersion: 36,
+    targetSdkVersion: 36
+  ]
+
+  ext.getExtOrDefault = { prop ->
+    if (rootProject.ext.has(prop)) {
+      return rootProject.ext.get(prop)
+    }
+
+    return ReactNativeFFmpeg[prop]
   }
-
-  dependencies {
-    classpath 'com.android.tools.build:gradle:8.1.0'
-  }
 }
 
-apply plugin: 'com.android.library'
-
-static def safePackageName(String packageName) {
-  packageName.replace("-lts", "")
+apply plugin: "com.android.library"
+// AGP 9 registers the `kotlin` extension itself; applying the plugin on top of it fails.
+if (project.extensions.findByName("kotlin") == null) {
+  apply plugin: "kotlin-android"
 }
 
-def safePackageVersion(String packageName) {
-  def version = project.properties['ffmpegKit.android.main.version']
-  def ltsVersion = project.properties['ffmpegKit.android.lts.version']
-  packageName.contains("-lts") ? ltsVersion + ".LTS" : version
-}
+apply plugin: "com.facebook.react"
 
-def safeExtGet(String prop, String fallback) {
-  rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
-}
+// The FFmpegKit binaries are built by .github/workflows/native.yml and attached to a GitHub release; JitPack
+// serves that release's AAR as `com.github.wekor:ffmpeg:<release>` (see jitpack.yml at the repo root).
+def ffmpegKitRelease = new JsonSlurper().parse(file("../package.json")).ffmpegKit.release
 
 android {
-  if (project.android.hasProperty("namespace")) {
-    namespace 'com.arthenica.ffmpegkit.reactnative'
-  }
+  namespace "com.wekor.reactnativeffmpeg"
 
-  compileSdkVersion 33
+  compileSdkVersion getExtOrDefault("compileSdkVersion")
 
   defaultConfig {
-    minSdkVersion safeExtGet('ffmpegKitPackage', 'https').contains("-lts") ? 16 : 24
-    targetSdkVersion 33
-    versionCode 602
-    versionName "6.0.2"
+    minSdkVersion getExtOrDefault("minSdkVersion")
+    targetSdkVersion getExtOrDefault("targetSdkVersion")
   }
 
-  buildTypes {
-    release {
-      minifyEnabled false
-    }
-  }
-  lintOptions {
-    disable 'GradleCompatible'
-  }
   compileOptions {
-    sourceCompatibility JavaVersion.VERSION_11
-    targetCompatibility JavaVersion.VERSION_11
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
   }
 }
 
 repositories {
-  mavenCentral()
   google()
-  maven { url 'https://jitpack.io' }
-
-  def found = false
-  def defaultDir = null
-  def androidSourcesName = 'React Native sources'
-
-  if (rootProject.ext.has('reactNativeAndroidRoot')) {
-    defaultDir = rootProject.ext.get('reactNativeAndroidRoot')
-  } else {
-    defaultDir = new File(
-      projectDir,
-      'node_modules/react-native/android'
-    )
-  }
-
-  if (defaultDir.exists()) {
-    maven {
-      url defaultDir.toString()
-      name androidSourcesName
-    }
-
-    logger.info(":${project.name}:reactNativeAndroidRoot ${defaultDir.canonicalPath}")
-    found = true
-  } else {
-    def parentDir = rootProject.projectDir
-
-    1.upto(5, {
-      if (found) return true
-      parentDir = parentDir.parentFile
-
-      def androidSourcesDir = new File(
-        parentDir,
-        'node_modules/react-native'
-      )
-
-      def androidPrebuiltBinaryDir = new File(
-        parentDir,
-        'node_modules/react-native/android'
-      )
-
-      if (androidPrebuiltBinaryDir.exists()) {
-        maven {
-          url androidPrebuiltBinaryDir.toString()
-          name androidSourcesName
-        }
-
-        logger.info(":${project.name}:reactNativeAndroidRoot ${androidPrebuiltBinaryDir.canonicalPath}")
-        found = true
-      } else if (androidSourcesDir.exists()) {
-        maven {
-          url androidSourcesDir.toString()
-          name androidSourcesName
-        }
-
-        logger.info(":${project.name}:reactNativeAndroidRoot ${androidSourcesDir.canonicalPath}")
-        found = true
-      }
-    })
-  }
-
-  if (!found) {
-    throw new GradleException(
-      "${project.name}: unable to locate React Native android sources. " +
-        "Ensure you have you installed React Native as a dependency in your project and try again."
-    )
-  }
+  mavenCentral()
+  maven { url "https://www.jitpack.io" }
 }
 
 dependencies {
-  api 'com.facebook.react:react-native:+'
-  implementation 'com.github.wekor:ffmpeg:v6.0.0'
+  implementation "com.facebook.react:react-android"
+  implementation "com.github.wekor:ffmpeg:${ffmpegKitRelease}"
 }
