@@ -11,6 +11,11 @@
 name: Native
 
 on:
+  # Rebuilds when the build itself changes on a branch other than master, where workflow_dispatch is unavailable
+  # until this file reaches the default branch.
+  push:
+    branches-ignore: [master]
+    paths: [.github/workflows/native.yml, .github/scripts/**]
   workflow_dispatch:
     inputs:
       upstream-ref:
@@ -26,11 +31,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-${{ inputs.release }}
+  group: native-${{ inputs.release || 'native-v9.0.2' }}
   cancel-in-progress: false
 
 env:
   UPSTREAM_REPOSITORY: arthenica/ffmpeg-kit-next
+  # A push has no inputs; it builds the defaults above.
+  UPSTREAM_REF: ${{ inputs.upstream-ref || 'v9.0.2' }}
+  RELEASE: ${{ inputs.release || 'native-v9.0.2' }}
   # LGPL only: no x264, x265, xvidcore, vid.stab or rubberband. openssl provides TLS (FFmpegKitNext's CI leaves
   # gnutls out).
   COMMON_LIBRARIES: >-
@@ -71,7 +79,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ${{ env.UPSTREAM_REPOSITORY }}
-          ref: ${{ inputs.upstream-ref }}
+          ref: ${{ env.UPSTREAM_REF }}
           path: upstream
       - uses: actions/setup-java@v5
         with:
@@ -110,7 +118,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ${{ env.UPSTREAM_REPOSITORY }}
-          ref: ${{ inputs.upstream-ref }}
+          ref: ${{ env.UPSTREAM_REF }}
           path: upstream
       - uses: actions/setup-java@v5
         with:
@@ -135,8 +143,6 @@ jobs:
         if: failure()
         run: tail -200 build.log
       - name: Collect the AAR and its POM
-        env:
-          RELEASE: ${{ inputs.release }}
         run: |
           set -euo pipefail
           aar=$(find prebuilt -path '*-maven/com/arthenica/ffmpeg-kit-next/*/ffmpeg-kit-next-*.aar' -print -quit)
@@ -219,7 +225,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ${{ env.UPSTREAM_REPOSITORY }}
-          ref: ${{ inputs.upstream-ref }}
+          ref: ${{ env.UPSTREAM_REF }}
           path: upstream
       - name: Install host packages
         run: ../self/.github/scripts/install-host-packages.sh macos
@@ -254,7 +260,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ${{ env.UPSTREAM_REPOSITORY }}
-          ref: ${{ inputs.upstream-ref }}
+          ref: ${{ env.UPSTREAM_REF }}
           path: upstream
       - name: Install host packages
         run: ../self/.github/scripts/install-host-packages.sh macos
@@ -299,8 +305,6 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE: ${{ inputs.release }}
-          UPSTREAM_REF: ${{ inputs.upstream-ref }}
         run: |
           set -euo pipefail
           notes="FFmpegKit binaries built from ${UPSTREAM_REPOSITORY}@${UPSTREAM_REF} (LGPL-3.0)."
@@ -322,8 +326,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       # JitPack builds an artifact on its first request; ask now so the first app build doesn't wait for it.
       - name: Warm up JitPack
-        env:
-          RELEASE: ${{ inputs.release }}
         run: |
           curl --silent --show-error --max-time 900 --output /dev/null --write-out '%{http_code}\n' \
             "https://jitpack.io/com/github/${GITHUB_REPOSITORY}/${RELEASE}/ffmpeg-${RELEASE}.pom" || true
